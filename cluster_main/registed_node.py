@@ -31,14 +31,17 @@ class RegistedNode(threading.Thread):
         self.cluster_server = cluster_server
         self.node_socket_fd = socket_fd
         self.node_socket_addr = socket_addr
+        self.node_net_connection = True
         self.cpu_core = cpu_core
         self.invoke_thread = {}
 
     def run(self):
         while True:
             time.sleep(server_config.ThreadWakeInterval)
-            if not self.cluster_server.is_server_running:
+            if not self.cluster_server.is_server_running \
+                or not self.node_net_connection:
                 break
+
             if len(self.invoke_thread) == self.cpu_core:
                 continue
 
@@ -54,9 +57,11 @@ class RegistedNode(threading.Thread):
 
         self.cluster_server.node_resource_release(hash(self.node_socket_addr))
 
-    def invoke_thread_release(self, key):
+    def invoke_thread_release(self, key, net_breaked=False):
         if self.invoke_thread.get(key, None) is not None:
             self.invoke_thread.pop(key)
+        if net_breaked:
+            self.node_net_connection = False
 
     @staticmethod
     def invoke_node_compute(registed_node, solver_item, invoke_id):
@@ -83,7 +88,7 @@ class RegistedNode(threading.Thread):
         except Exception as invoke_send_exception:
             cluster_logger.warning("Can't send z3_sexpr to node. msg: %s" %str(invoke_send_exception))
             registed_node.cluster_server.send_result(socket_fd, False)
-            registed_node.invoke_thread_release(invoke_id)
+            registed_node.invoke_thread_release(invoke_id, net_breaked=True)
             return
 
         recv_complete_data = socket_utils.buffer_recv(registed_node.node_socket_fd, timeout)

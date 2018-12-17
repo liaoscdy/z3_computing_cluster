@@ -7,3 +7,5 @@
 # @Email    : liaosc@liaoshichao.com
 # @Github   : https://github.com/liaoscdy
 
+def request_solver(ip, port, sexpr):
+    pass

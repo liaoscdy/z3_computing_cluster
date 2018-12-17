@@ -53,7 +53,7 @@ class ClusterServer:
             self.server_socket.listen(server_config.TcpListening)
             self.is_server_running = True
         except Exception as server_exception:
-            cluster_logger.error("Server can't start, error: ", server_exception)
+            cluster_logger.error("Server can't start, error: %s" %str(server_exception))
 
         cluster_logger.info("ClusterServer Start!")
         # Thread for clean timeout pending solver
@@ -67,7 +67,7 @@ class ClusterServer:
             try:
                 client_socket, client_addr = self.server_socket.accept()
             except Exception as accept_exception:
-                cluster_logger.error("Error in server accept, msg: ", accept_exception)
+                cluster_logger.error("Error in server accept, msg: %s" %str(accept_exception))
                 break
 
             recv_complete_data = socket_utils.buffer_recv(client_socket)
@@ -78,6 +78,7 @@ class ClusterServer:
             recv_data_string = recv_complete_data.decode('utf-8', 'ignore')
             try:
                 recv_data_json = json.loads(recv_data_string)
+                cluster_logger.debug("Server recv json: %s" %str(recv_data_json))
             except json.JSONDecodeError:
                 cluster_logger.warning("Error format of recv data.")
                 continue
@@ -86,6 +87,7 @@ class ClusterServer:
             if action == "registe_node":
                 cpu_core = recv_data_json.get("cpu_core", None)
                 if cpu_core is not None and cpu_core.isdigit():
+                    cluster_logger.info("Registed cluster_node, address: %s cpu_core: %s" %(str(client_addr), cpu_core))
                     registed_node = RegistedNode(self, client_socket, client_addr, int(cpu_core))
                     self.node_resource_append(hash(client_addr), registed_node)
                     registed_node.start()
@@ -95,8 +97,11 @@ class ClusterServer:
                 if solver_sexpr is not None:
                     self.solver_queue_lock()
                     if len(self.solver_queue) < server_config.SolverPending:
+                        cluster_logger.info("A solution request arrived.")
                         solver_queue_item = SolverQueueItem(client_socket, solver_sexpr)
                         self.solver_queue.append(solver_queue_item)
+                    else:
+                        ClusterServer.send_result(client_socket, False)
                     self.solver_queue_unlock()
                 else:
                     ClusterServer.send_result(client_socket, False)
@@ -186,6 +191,7 @@ class ClusterServer:
                 if used_time < server_config.SolverTime:
                     valid_solver_queue.append(solver_item)
                 else:
+                    cluster_logger.info("Deleted timeout solver requests.")
                     ClusterServer.send_result(solver_item.socket_fd, False)
             cluster_server.solver_queue = valid_solver_queue
             cluster_server.solver_queue_unlock()
