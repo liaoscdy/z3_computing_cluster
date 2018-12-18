@@ -32,6 +32,8 @@ class SolverQueueItem:
         self.socket_fd = socket_fd
         self.z3_sexpr = z3_sexpr
         self.pending_time = datetime.datetime.now()
+        self.solver_id = hash(str(z3_sexpr) + str(self.pending_time))
+
 
 class ClusterServer:
 
@@ -84,9 +86,9 @@ class ClusterServer:
                 continue
 
             action = recv_data_json.get("action", None)
-            if action == "registe_node":
+            if action == "registe":
                 cpu_core = recv_data_json.get("cpu_core", None)
-                if cpu_core is not None and cpu_core.isdigit():
+                if cpu_core is not None and str(cpu_core).isdigit():
                     cluster_logger.info("Registed cluster_node, address: %s cpu_core: %s" %(str(client_addr), cpu_core))
                     registed_node = RegistedNode(self, client_socket, client_addr, int(cpu_core))
                     self.node_resource_append(hash(client_addr), registed_node)
@@ -106,9 +108,11 @@ class ClusterServer:
                 else:
                     ClusterServer.send_result(client_socket, False)
 
-            if action == "shutdown":
-                self.server_stop()
-                break
+            if action == "control":
+                cmd = recv_data_json.get("cmd", None)
+                if cmd == "shutdown":
+                    self.server_stop()
+                    break
 
         self.server_wait_release()
         cluster_logger.info("ClusterServer is Stoped.")

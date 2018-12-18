@@ -14,11 +14,13 @@ TcpHostPort = 8888
 # Tcp queue length
 TcpListening = 10
 
+# The max number of registed solver node.
+SolverNodeMax = 1000
 # Queue length waiting to be solved
 SolverPending = 1000
 # The frequency of checking queue timeout data
 SolverCheckTime = 2
 # Time to solve the expression
-SolverTime = 100
+SolverTime = 10
 
 ThreadWakeInterval = 0.2

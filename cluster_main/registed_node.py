@@ -36,6 +36,20 @@ class RegistedNode(threading.Thread):
         self.invoke_thread = {}
 
     def run(self):
+        registed = len(self.cluster_server.node_resource) < server_config.SolverNodeMax
+        registed_msg = {
+            "action":"registe",
+            "registed":registed
+        }
+        try:
+            socket_utils.buffer_send(self.node_socket_fd, json.dumps(registed_msg))
+        except Exception as e:
+            registed = False
+            cluster_logger.warning("Can't send registed msg to node. error: %s" %str(e))
+
+        if not registed:
+            self.cluster_server.node_resource_release(hash(self.node_socket_addr))
+
         while True:
             time.sleep(server_config.ThreadWakeInterval)
             if not self.cluster_server.is_server_running \
@@ -55,6 +69,16 @@ class RegistedNode(threading.Thread):
             self.invoke_thread[invoke_id] = invoke_thread
             invoke_thread.start()
 
+        try:
+            shutdown_msg = {
+                "action":"control",
+                "cmd":"shutdown"
+            }
+            socket_utils.buffer_send(self.node_socket_fd, json.dumps(shutdown_msg))
+            self.node_socket_fd.shutdown(socket.SHUT_RDWR)
+            self.node_socket_fd.close()
+        except Exception as e:
+            cluster_logger.info("Shutdonw socket: %s, Ignore error: %s" %(self.node_socket_addr, str(e)))
         self.cluster_server.node_resource_release(hash(self.node_socket_addr))
 
     def invoke_thread_release(self, key, net_breaked=False):

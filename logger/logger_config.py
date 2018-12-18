@@ -14,7 +14,7 @@ LoggerName = "cluster_logger"
 # 日志文件路径
 LogFile = os.path.abspath(os.path.dirname(__file__) + os.path.sep + "../runtime/cluster.log")
 # 日志等级
-LoggerLevel = "INFO"
+LoggerLevel = "DEBUG"
 # 单个日志文件大小
 LoggerFileSize = 1024 * 1024 * 100
 
