@@ -60,7 +60,6 @@ class ClusterServer:
         cluster_logger.info("ClusterServer Start!")
         # Thread for clean timeout pending solver
         timeout_check = threading.Thread(target=ClusterServer.handle_timeout, args=(self,))
-        self.node_resource_append("handle_timeout", timeout_check)
         timeout_check.start()
         while True:
             if not self.is_server_running:
@@ -72,7 +71,7 @@ class ClusterServer:
                 cluster_logger.error("Error in server accept, msg: %s" %str(accept_exception))
                 break
 
-            recv_complete_data = socket_utils.buffer_recv(client_socket)
+            recv_complete_data, _ = socket_utils.buffer_recv(client_socket)
             if len(recv_complete_data) == 0:
                 cluster_logger.warning("Recv data is None.")
                 continue
@@ -99,7 +98,7 @@ class ClusterServer:
                 if solver_sexpr is not None:
                     self.solver_queue_lock()
                     if len(self.solver_queue) < server_config.SolverPending:
-                        cluster_logger.info("A solution request arrived.")
+                        cluster_logger.debug("A solution request arrived.")
                         solver_queue_item = SolverQueueItem(client_socket, solver_sexpr)
                         self.solver_queue.append(solver_queue_item)
                     else:
@@ -138,6 +137,15 @@ class ClusterServer:
             if len(self.solver_queue) > 0:
                 queue_item = self.solver_queue.pop()
         return queue_item
+
+    def solver_queue_push(self, solver_queue_item):
+        push_success = False
+        self.solver_queue_lock()
+        if len(self.solver_queue) < server_config.SolverPending:
+            self.solver_queue.append(solver_queue_item)
+            push_success = True
+        self.solver_queue_unlock()
+        return push_success
 
     def node_resource_release(self, key):
         """
@@ -187,6 +195,7 @@ class ClusterServer:
                 break
 
             time.sleep(server_config.SolverCheckTime)
+            print("Registed node: ", len(cluster_server.node_resource))
             cluster_server.solver_queue_lock()
             valid_solver_queue = []
             for solver_item in cluster_server.solver_queue:

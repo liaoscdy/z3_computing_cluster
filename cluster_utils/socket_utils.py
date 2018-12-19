@@ -27,30 +27,29 @@ def buffer_send(socket_fd, buffer):
     socket_fd.send(buffer.encode('utf-8') + MSG_END_TAG)
 
 
-def buffer_recv(socket_fd, timeout=5):
+def buffer_recv(socket_fd, timeout=5, blocked=False):
     """
     :type socket_fd socket.socket
-    :type timeout int
+    :type timeout float
     :param socket_fd:
     :param timeout:
+    :param blocked:
     :return: bytes, is_net_break
     """
     recv_complete_data = bytes()
     recv_start = datetime.datetime.now()
-    socket_fd.setblocking(0)
-    socket_fd.settimeout(0.1)
-
+    socket_fd.setblocking(blocked)
     while True:
         recv_current = datetime.datetime.now()
         if timeout < int((recv_current - recv_start).seconds):
             break
-
         try:
             recv_data = socket_fd.recv(TCP_BUFFER_SIZE)
+        except BlockingIOError:
+            continue
         except Exception as e:
             cluster_logger.warning("Error in recv tcp data. error: %s" %str(e))
             return bytes(), True
-
         recv_complete_data += recv_data
         if MSG_END_TAG in recv_complete_data:
             recv_complete_data = recv_complete_data[:recv_complete_data.find(MSG_END_TAG)]

@@ -54,10 +54,12 @@ class ClusterNode:
                     break
                 continue
 
+            print(recv_complete_data)
             if len(recv_complete_data) == 0:
                 continue
 
             recv_data_string = recv_complete_data.decode('utf-8', 'ignore')
+            print("node recv: ", recv_data_string)
             try:
                 recv_data_json = json.loads(recv_data_string)
             except json.JSONDecodeError:

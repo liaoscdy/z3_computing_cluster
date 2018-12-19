@@ -8,11 +8,13 @@
 # @Github   : https://github.com/liaoscdy
 
 # IP address of tcp listener
-TcpHostIp = "127.0.0.1"
+TcpHostIp = "0.0.0.0"
 # Port of tcp listener
 TcpHostPort = 8888
 # Tcp queue length
 TcpListening = 10
+# Tcp read timeout
+TcpReadTimeout = 10
 
 # The max number of registed solver node.
 SolverNodeMax = 1000
@@ -21,6 +23,6 @@ SolverPending = 1000
 # The frequency of checking queue timeout data
 SolverCheckTime = 2
 # Time to solve the expression
-SolverTime = 10
+SolverTime = 50
 
 ThreadWakeInterval = 0.2

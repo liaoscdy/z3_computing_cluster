@@ -12,6 +12,7 @@ import time
 import threading
 import datetime
 import socket
+import select
 
 from cluster_main import server_config
 from cluster_utils import socket_utils
@@ -31,9 +32,9 @@ class RegistedNode(threading.Thread):
         self.cluster_server = cluster_server
         self.node_socket_fd = socket_fd
         self.node_socket_addr = socket_addr
+        self.node_socket_fd.setblocking(0)
         self.node_net_connection = True
         self.cpu_core = cpu_core
-        self.invoke_thread = {}
 
     def run(self):
         registed = len(self.cluster_server.node_resource) < server_config.SolverNodeMax
@@ -43,32 +44,86 @@ class RegistedNode(threading.Thread):
         }
         try:
             socket_utils.buffer_send(self.node_socket_fd, json.dumps(registed_msg))
+            cluster_logger.debug("Send registed receipt.")
         except Exception as e:
             registed = False
             cluster_logger.warning("Can't send registed msg to node. error: %s" %str(e))
 
         if not registed:
             self.cluster_server.node_resource_release(hash(self.node_socket_addr))
+            return
 
+        try:
+            epoll = select.epoll()
+            epoll.register(self.node_socket_fd.fileno(), select.EPOLLIN)
+        except Exception as e:
+            cluster_logger.warning("Epoll node_socket failed. error: %s" % str(e))
+            self.cluster_server.node_resource_release(hash(self.node_socket_addr))
+            return
+
+        solver_pending = {}
         while True:
-            time.sleep(server_config.ThreadWakeInterval)
             if not self.cluster_server.is_server_running \
                 or not self.node_net_connection:
                 break
 
-            if len(self.invoke_thread) == self.cpu_core:
-                continue
+            solver_queue_item = None
+            if len(solver_pending) < self.cpu_core:
+                solver_queue_item = self.cluster_server.solver_queue_pop()
 
-            solver_item = self.cluster_server.solver_queue_pop()
-            if solver_item is None:
-                continue
+            epoll_events = epoll.poll(1)
+            for fileno, event in epoll_events:
+                if event & select.EPOLLIN:
+                    recv_complete_data, _ = socket_utils.buffer_recv(self.node_socket_fd, timeout=0.5)
+                    if len(recv_complete_data) == 0:
+                        continue
+                    try:
+                        recv_data_string = recv_complete_data.decode('utf-8', 'ignore')
 
-            invoke_id = hash(datetime.datetime.now())
-            invoke_thread = threading.Thread(target=RegistedNode.invoke_node_compute,
-                             args=(self, solver_item, invoke_id))
-            self.invoke_thread[invoke_id] = invoke_thread
-            invoke_thread.start()
+                        cluster_logger.debug("Get solver data: %s" % recv_data_string)
 
+                        recv_data_json = json.loads(recv_data_string)
+                        recv_action = recv_data_json.get("action", None)
+                        if recv_action != "solver":
+                            continue
+                        solver_id = recv_data_json.get("solver_id", None)
+                        solver_result = recv_data_json.get("result", None)
+                        if solver_id is None or solver_result is None:
+                            continue
+                        if type(solver_result) is not bool:
+                            solver_result = False
+
+                        solver_item = solver_pending.get(solver_id, None)
+                        if solver_item is not None:
+                            solver_pending.pop(solver_id)
+                            self.cluster_server.send_result(solver_item.socket_fd, solver_result)
+                            solver_item.socket_fd.close()
+                    except Exception as result_exception:
+                        cluster_logger.warning("Error in recv/send node's result. msg: %s" % str(result_exception))
+                if event & select.EPOLLHUP:
+                    self.node_net_connection = False
+                    print("closed!!!!!!!!!!!!!!!!!!")
+                    cluster_logger.warning("ClusterNode Connect breaked.")
+                    break
+            # clean timeout requests
+            self.clean_timeout(solver_pending)
+            if solver_queue_item is not None:
+                print("Get solver item: ", solver_queue_item.solver_id)
+                solver_msg = {
+                    "action":"solver",
+                    "solver_id":solver_queue_item.solver_id,
+                    "sexpr":solver_queue_item.z3_sexpr
+                }
+                try:
+                    socket_utils.buffer_send(self.node_socket_fd, json.dumps(solver_msg))
+                    solver_pending[solver_queue_item.solver_id] = solver_queue_item
+                    print("send solver_item to node.")
+                except Exception as send_exception:
+                    cluster_logger.warning("Can't send solver request to node. msg: %s" %str(send_exception))
+                    if not self.cluster_server.solver_queue_push(solver_queue_item):
+                        solver_pending[solver_queue_item.solver_id] = solver_queue_item
+
+        self.release_pending(solver_pending)
         try:
             shutdown_msg = {
                 "action":"control",
@@ -81,54 +136,27 @@ class RegistedNode(threading.Thread):
             cluster_logger.info("Shutdonw socket: %s, Ignore error: %s" %(self.node_socket_addr, str(e)))
         self.cluster_server.node_resource_release(hash(self.node_socket_addr))
 
-    def invoke_thread_release(self, key, net_breaked=False):
-        if self.invoke_thread.get(key, None) is not None:
-            self.invoke_thread.pop(key)
-        if net_breaked:
-            self.node_net_connection = False
-
-    @staticmethod
-    def invoke_node_compute(registed_node, solver_item, invoke_id):
+    def clean_timeout(self, solver_pending):
         """
-        :type registed_node RegistedNode
-        :param registed_node:
-        :param solver_item:
-        :param invoke_id:
-        :return:
+        :type solver_pending dict
+        :param solver_pending: 
+        :return: 
         """
+        keys = solver_pending.keys()
+        remove_keys = []
+        for solver_id in keys:
+            solver_item = solver_pending[solver_id]
+            current_time = datetime.datetime.now()
+            used_time = int((current_time - solver_item.pending_time).seconds)
+            if used_time > server_config.SolverTime:
+                cluster_logger.info("Deleted timeout solver requests.")
+                remove_keys.append(solver_id)
+                self.cluster_server.send_result(solver_item.socket_fd, False)
 
-        socket_fd = solver_item.socket_fd
-        z3_sexpr = solver_item.z3_sexpr
-        pending_time = solver_item.pending_time
-        invoke_begin = datetime.datetime.now()
-        timeout = server_config.SolverTime - (int((invoke_begin - pending_time).seconds))
-        if timeout <= 0:
-            registed_node.cluster_server.send_result(socket_fd, False)
-            registed_node.invoke_thread_release(invoke_id)
-            return
+        for remove_key in remove_keys:
+            solver_pending.pop(remove_key)
 
-        try:
-            socket_utils.buffer_send(registed_node.node_socket_fd, json.dumps({"sexpr":z3_sexpr}))
-        except Exception as invoke_send_exception:
-            cluster_logger.warning("Can't send z3_sexpr to node. msg: %s" %str(invoke_send_exception))
-            registed_node.cluster_server.send_result(socket_fd, False)
-            registed_node.invoke_thread_release(invoke_id, net_breaked=True)
-            return
-
-        recv_complete_data = socket_utils.buffer_recv(registed_node.node_socket_fd, timeout)
-        if len(recv_complete_data) == 0:
-            registed_node.cluster_server.send_result(socket_fd, False)
-            registed_node.invoke_thread_release(invoke_id)
-            return
-
-        try:
-            recv_data_string = recv_complete_data.decode('utf-8', 'ignore')
-            recv_data_json = json.loads(recv_data_string)
-            solver_result = recv_data_json.get("result", False)
-            if type(solver_result) is not bool:
-                solver_result = False
-
-            registed_node.cluster_server.send_result(socket_fd, solver_result)
-        except Exception as result_exception:
-            cluster_logger.warning("Error in recv node's result. msg: %s" %str(result_exception))
-        registed_node.invoke_thread_release(invoke_id)
+    def release_pending(self, solver_pending):
+        for solver_item in solver_pending:
+            if not self.cluster_server.solver_queue_push(solver_item):
+                self.cluster_server.send_result(solver_item.socket_fd, False)
